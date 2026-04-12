@@ -1,11 +1,13 @@
-# hqg-databroker
-Centralized data service that normalizes, caches, and serves historical and live market data, economic data (e.g., FRED), and alternative datasets
+# hqg-datafeed
+Centralized data service that normalizes, caches, and serves historical and live market data, economic data (e.g., FRED), and alternative datasets. 
+
+Called datafeed because hqg-databroker looks too similar to hqg-dashboard at first glance lol (lowk dyslexic).
 
 ## What Is This
 
 Every service we run (backtester, execution engine, dashboard) currently manages its own connection to external data. The backtester talks to Yahoo Finance directly, the engine polls Alpaca directly, the dashboard will need its own data source as we scale functionality. This doesn't scale, and it's already a pain.
 
-The hqg-databroker is a standalone service that owns all data retrieval, caching, and delivery. No consumer needs to know where data comes from or how it's fetched/aggregated.
+The hqg-datafeed is a standalone service that owns all data retrieval, caching, and delivery. No consumer needs to know where data comes from or how it's fetched/aggregated.
 
 Currently planning out just two modes:
 - **Historical**: "Give me SPY and TLT, daily bars, 2015-2024." -> returns a DataFrame.
@@ -15,7 +17,7 @@ Currently planning out just two modes:
 
 **Backtester** needs historical price data (Yahoo Finance currently, Databento eventually), alternative data (Carbon Arc), macro data (FRED), and whatever else we plug in over time.
 
-**Execution Engine** needs live market data. Currently polls Alpaca's IEX endpoint via REST, aggregates quotes into OHLC bars, and passes each bar to the strategy's `on_data`. The broker should own that aggregation: _engine asks for a slice, gets a slice, passes it through_. It may need historic data down the line as well, but integrating would be trivial with hqg-db.
+**Execution Engine** needs live market data. Currently polls Alpaca's IEX endpoint via REST, aggregates quotes into OHLC bars, and passes each bar to the strategy's `on_data`. The broker should own that aggregation: _engine asks for a slice, gets a slice, passes it through_. It may need historic data down the line as well, but integrating would be trivial with hqg-datafeed.
 
 **Dashboard** needs historical data for benchmarks (S&P 500, Bloomberg Bond Aggregate) and research tools (universe explorer: covariance/correlation matrices over user-defined windows). Also needs live data for a price carousel showing current prices + daily changes.
 
@@ -33,7 +35,7 @@ Currently planning out just two modes:
 
 ### V1 - Market Data (YF Only)
 
-Drop-in replacement for current data interactions. No breaking changes to hqg-algorithms (besides adding hourly granularity support). Backtester and engine swap out their data providers for the databroker and experience no quality changes.
+Drop-in replacement for current data interactions. No breaking changes to hqg-algorithms (besides adding hourly granularity support). Backtester and engine swap out their data providers for the datafeed and experience no quality changes.
 
 **V0.0 - Historical tickers.** Migrate all historical data fetching from the backtester to the broker. Endpoint: given ticker names, granularity, and date range, return OHLCV data. Current flow: check parquet coverage -> collect cache misses -> batch-fetch from YF back to 2000 -> write/extend parquets -> return requested slice.
 
