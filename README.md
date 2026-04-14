@@ -281,3 +281,21 @@ The above API is built around price data. Every bar is OHLCV, keyed by symbol an
 Core question: **how to we make it easy for QRs to access alternative data?**. There exists a future where using the data is hidden behind obscurity (how to subscribe to a specific dataset at a per-ticker basis, eg, CarbonArc.consumer_credit.AAPL to add this to Slice, accessible similarly?) and confusion over what is even available.
 
 Something like self.subscribe(data.CarbonArc.consumer_credit.AAPL) might be clear? But AST parsing could fall apart on renamed imports... Recall, we'd like to fetch data _before_ passing strategy to container (with initilization overhead & no write/internet access).
+
+
+
+Note: we should the http nonsense away so each service just interacts with a datafeed client.
+
+### backtester usage
+```python3
+from hqg_databroker_client import DataBrokerClient
+provider = DataBrokerClient(base_url="http://localhost:8000")
+data = provider.get_data(["SPY", "TLT"], start, end, BarSize.DAILY)
+```
+
+### engine
+```python3
+from hqg_databroker_client import DataBrokerClient
+feed = DataBrokerClient(base_url="http://localhost:8000")
+async for bar in feed.stream_bars(["AAPL"], cadence="1h"):
+```
