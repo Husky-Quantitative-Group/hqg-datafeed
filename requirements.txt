@@ -3,3 +3,8 @@ pandas
 fastapi
 starlette
 pydantic
+pytest
+pandas_market_calendars
+yfinance
+httpx
+pyarrow

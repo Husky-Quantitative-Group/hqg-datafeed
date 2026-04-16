@@ -82,16 +82,7 @@ class ParquetStore:
         fetch_start: datetime,
         fetch_end: datetime,
     ) -> bool:
-        """
-        Check if cache is full enough to skip a fetch.
-
-        End date: cache must extend to fetch_end.
-        Start date: if we're asking for our default range (back to 2000)
-        or narrower, a previous fetch already requested that far back,
-        so start is considered covered. Otherwise, cache must start
-        within 30 days of fetch_start (generous buffer for holidays
-        and tickers with limited history, e.g., IPO'd in 2015).
-        """
+        """ Is cache full enough to skip a fetch?"""
         cached = self.read(symbol)
         if cached is None:
             return False
@@ -100,11 +91,12 @@ class ParquetStore:
         cache_max = cached.index.max().date()
 
         # if requesting our default range or narrower, a previous fetch
-        # already went back to 2000 - start is covered
+        # already requested that far back, so start is covered!
         if fetch_start >= DEFAULT_HISTORY_START:
             start_covered = True
         else:
-            start_covered = cache_min <= (fetch_start + timedelta(days=30)).date()
+            # incl big buffer for non-trading days
+            start_covered = cache_min <= (fetch_start + timedelta(days=30)).date()  
 
         end_covered = cache_max >= fetch_end.date()
 

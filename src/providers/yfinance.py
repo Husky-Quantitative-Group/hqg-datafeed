@@ -126,12 +126,19 @@ class YFinanceProvider:
 
 
     def _last_trading_day(self) -> datetime:
-        """Approximate last trading day (no holiday calendar)."""
+        """
+        Approximate last trading day (no holiday calendar).
+        So we don't re-fetch "missing" data if today is a weekend.
+        """
+        # TODO: if today is a holiday, we will always refetch, as 
+        #   cache_end is last trading day, which is not today. merry christmas.
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         if today.weekday() == 5:        # Saturday
             return today - timedelta(days=1)
         elif today.weekday() == 6:      # Sunday
             return today - timedelta(days=2)
+        #NOTE: when implementing holiday check, precompute & cache
+        #    NYSE calendar (it's slow).
         return today
 
 
@@ -148,14 +155,6 @@ class YFinanceProvider:
 
         Data is always cached/fetched as daily bars and resampled to
         bar_size on the fly.
-
-        Flow:
-        1. Widen fetch window (back to 2000, up to last trading day)
-           so the cache is useful for future requests.
-        2. Lockless pre-scan for cache misses.
-        3. Lock confirmed misses, double-check, fetch, merge into cache.
-        4. Read from cache, slice to requested window, resample, build
-           the final MultiIndex DataFrame.
         """
         # widen the fetch window so the cache is useful for future requests
         fetch_start = min(start_date, DEFAULT_HISTORY_START)
@@ -176,7 +175,8 @@ class YFinanceProvider:
                 ]
 
                 if confirmed_misses:
-                    new_data = self._fetch_from_yf(confirmed_misses, fetch_start, fetch_end)
+                    new_data = self._fetch_from_yf(confirmed_misses, 
+                                                   fetch_start, fetch_end)
 
                     for symbol in confirmed_misses:
                         if symbol not in new_data:
