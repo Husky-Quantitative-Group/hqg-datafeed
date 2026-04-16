@@ -177,9 +177,9 @@ def test_concurrent_calls_dedup_to_single_fetch(provider, monkeypatch, fake_dail
         # Simulate a slow network so threads overlap inside lock acquisition window
         time.sleep(0.2)
 
-        # Build a frame in the shape yf.download returns for a single
-        # ticker (flat columns, title-case).
-        df = fake_daily_frame("2000-01-03", "2024-12-31")
+        # mimic request from yfinance provider (extend end date to today)
+        td = datetime.today().strftime('%Y-%m-%d')  
+        df = fake_daily_frame("2000-01-03", td)
         df.columns = [c.title() for c in df.columns]  # Open/High/Low/Close/Volume
         return df
 
@@ -222,7 +222,9 @@ def test_cached_read_benchmark(provider, monkeypatch, fake_daily_frame):
     # Use a fake yf.download for the one-time warmup so this test is
     # offline-friendly and deterministic.
     def fake_download(tickers, start, end, interval, progress, group_by, auto_adjust):
-        df = fake_daily_frame("2000-01-03", "2024-12-31")
+        # mimic request from yfinance provider (extend end date to today)
+        td = datetime.today().strftime('%Y-%m-%d')  
+        df = fake_daily_frame("2000-01-03", td)
         df.columns = [c.title() for c in df.columns]
         return df
 
@@ -267,7 +269,9 @@ def test_per_symbol_cache_independence(provider, monkeypatch, fake_daily_frame):
         frames = {}
         tickers_list = list(tickers) if isinstance(tickers, list) else [tickers]
         for t in tickers_list:
-            df = fake_daily_frame("2000-01-03", "2024-12-31", seed=100.0 + len(t))
+            # mimic request from yfinance provider (extend end date to today)
+            td = datetime.today().strftime('%Y-%m-%d')  
+            df = fake_daily_frame("2000-01-03", td, seed=100.0 + len(t))
             df.columns = [c.title() for c in df.columns]
             frames[t] = df
         if len(tickers_list) == 1:

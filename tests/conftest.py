@@ -24,7 +24,6 @@ def provider(tmp_store) -> YFinanceProvider:
     """YFinanceProvider backed by the temp store."""
     return YFinanceProvider(store=tmp_store)
 
-
 def _fake_daily_frame(start: str, end: str, seed: float = 100.0) -> pd.DataFrame:
     """
     Deterministic fake OHLCV frame with a business-day index.
