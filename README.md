@@ -33,7 +33,7 @@ Currently planning out just two modes:
 
 ## Versioning / Implementation Roadmap
 
-### V1 - Market Data (YF Only)
+### V1 - Market Data (YF & Alpaca Only)
 
 Drop-in replacement for current data interactions. No breaking changes to hqg-algorithms (besides adding hourly granularity support). Backtester and engine swap out their data providers for the datafeed and experience no quality changes.
 
@@ -281,3 +281,32 @@ The above API is built around price data. Every bar is OHLCV, keyed by symbol an
 Core question: **how to we make it easy for QRs to access alternative data?**. There exists a future where using the data is hidden behind obscurity (how to subscribe to a specific dataset at a per-ticker basis, eg, CarbonArc.consumer_credit.AAPL to add this to Slice, accessible similarly?) and confusion over what is even available.
 
 Something like self.subscribe(data.CarbonArc.consumer_credit.AAPL) might be clear? But AST parsing could fall apart on renamed imports... Recall, we'd like to fetch data _before_ passing strategy to container (with initilization overhead & no write/internet access).
+
+
+To maintain AST-parseablility...
+```python3
+from hqg_algorithms import (
+    Strategy, Cadence, BarSize, Slice, PortfolioView,
+    Signal, TargetWeights, Hold,
+    FRED, CarbonArc,    # alt data sources
+)
+
+class MomentumWithMacro(Strategy):
+    universe = ["AAPL", "BND"]                    # market data
+
+    datasets = [                                   # everything else
+        FRED("DGS10"),
+        FRED("UNRATE"),
+        CarbonArc.consumer_credit("AAPL"),
+        CarbonArc.food_traffic("MCD"),        # automatically add "MCD" to universe too & get market data
+    ]
+
+    cadence = Cadence(bar_size=BarSize.DAILY)
+
+    def on_data(self, data: Slice, portfolio: PortfolioView) -> Signal:
+        aapl = data.close("AAPL")
+        ten_yr = data.fred("DGS10")
+        mcd = data.open("MCD")    # added to universe, so can access market data (return warning)
+        credit = data.carbonarc.consumer_credit("AAPL")
+        ...
+```
