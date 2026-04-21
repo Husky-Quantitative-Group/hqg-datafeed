@@ -1,6 +1,7 @@
 hqg_algorithms>=1.0.1
 pandas
 fastapi
+uvicorn
 starlette
 pydantic
 pytest
