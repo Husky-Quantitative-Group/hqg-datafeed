@@ -1,24 +1,11 @@
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional
+from hqg_algorithms import BarSize
 
 from pydantic import BaseModel, Field
 
 
-class BarSize(str, Enum):
-    HOURLY = "hourly"
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    QUARTERLY = "quarterly"
-
-
-class Cadence(str, Enum):
-    ONE_HOUR = "1h"
-    ONE_DAY = "1d"
-    ONE_WEEK = "1w"     # expect primarily hourly and daily
-    ONE_MONTH = "1m"
-    ONE_QUARTER = "1q"
 
 
 class StreamStatus(str, Enum):

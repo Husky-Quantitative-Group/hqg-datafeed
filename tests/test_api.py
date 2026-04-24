@@ -70,7 +70,7 @@ def test_historical_happy_path(client, mock_provider):
             "symbols": ["SPY", "AAPL"],
             "start_date": "2023-01-03",
             "end_date": "2023-01-10",
-            "bar_size": "daily",
+            "bar_size": "1d",
         },
     )
 
@@ -79,7 +79,7 @@ def test_historical_happy_path(client, mock_provider):
 
     # top-level shape
     assert set(body["bars"].keys()) == {"SPY", "AAPL"}
-    assert body["metadata"]["bar_size"] == "daily"
+    assert body["metadata"]["bar_size"] == "1d"
     assert body["metadata"]["symbols_returned"] == ["SPY", "AAPL"]
     assert body["warnings"] is None
 
@@ -111,7 +111,7 @@ def test_empty_symbols_list_rejected(client):
             "symbols": [],      # emppty
             "start_date": "2023-01-03",
             "end_date": "2023-01-10",
-            "bar_size": "daily",
+            "bar_size": "1d",
         },
     )
     assert resp.status_code == 422
@@ -124,7 +124,7 @@ def test_bad_bar_size_rejected(client):
             "symbols": ["SPY"],
             "start_date": "2023-01-03",
             "end_date": "2023-01-10",
-            "bar_size": "yearly",   # not in enum
+            "bar_size": "1y",   # not in enum
         },
     )
     assert resp.status_code == 422
@@ -137,7 +137,7 @@ def test_start_after_end_rejected(client, mock_provider):
             "symbols": ["SPY"],
             "start_date": "2023-06-01",
             "end_date": "2023-01-01",
-            "bar_size": "daily",
+            "bar_size": "1d",
         },
     )
     assert resp.status_code == 400
@@ -152,7 +152,7 @@ def test_bad_date_format_rejected(client):
             "symbols": ["SPY"],
             "start_date": "01/03/2023",     # wrong format
             "end_date": "2023-01-10",
-            "bar_size": "daily",
+            "bar_size": "1d",
         },
     )
     # handler's datetime.strptime raises ValueError -> 400
@@ -169,7 +169,7 @@ def test_provider_raises_value_error_maps_to_404(client, mock_provider):
             "symbols": ["ZZZZ"],
             "start_date": "2023-01-03",
             "end_date": "2023-01-10",
-            "bar_size": "daily",
+            "bar_size": "1d",
         },
     )
     assert resp.status_code == 404
@@ -191,7 +191,7 @@ def test_empty_frame_returns_404(client, mock_provider):
             "symbols": ["SPY"],
             "start_date": "2023-01-03",
             "end_date": "2023-01-10",
-            "bar_size": "daily",
+            "bar_size": "1d",
         },
     )
     assert resp.status_code == 404
@@ -213,7 +213,7 @@ def test_missing_symbol_produces_warning(client, mock_provider):
             "symbols": ["SPY", "LEBRON_THE_GOAT"],
             "start_date": "2023-01-03",
             "end_date": "2023-01-10",
-            "bar_size": "daily",
+            "bar_size": "1d",
         },
     )
     assert resp.status_code == 200
@@ -228,10 +228,10 @@ def test_missing_symbol_produces_warning(client, mock_provider):
 @pytest.mark.parametrize(
     "api_value, hqg_value",
     [
-        ("daily", BarSize.DAILY),
-        ("weekly", BarSize.WEEKLY),
-        ("monthly", BarSize.MONTHLY),
-        ("quarterly", BarSize.QUARTERLY),
+        ("1d", BarSize.DAILY),
+        ("1w", BarSize.WEEKLY),
+        ("1m", BarSize.MONTHLY),
+        ("1q", BarSize.QUARTERLY),
     ],
 )
 def test_bar_size_mapping(client, mock_provider, api_value, hqg_value):

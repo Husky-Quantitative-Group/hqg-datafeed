@@ -2,7 +2,6 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List, Tuple
-from hqg_algorithms import BarSize as HQGBarSize
 import pandas as pd
 
 from ...providers.base import HistoricalProvider
@@ -16,28 +15,18 @@ from ..models import (
 
 logger = logging.getLogger(__name__)
 
-BAR_SIZE_MAP = {
-    #"hourly": HQGBarSize.HOURLY     # TODO: update hqg algos to support 1hr
-    "daily": HQGBarSize.DAILY,
-    "weekly": HQGBarSize.WEEKLY,
-    "monthly": HQGBarSize.MONTHLY,
-    "quarterly": HQGBarSize.QUARTERLY,
-}
-
 
 async def handle_historical(body: HistoricalRequest, historical_provider: HistoricalProvider) -> HistoricalResponse:
     start = datetime.strptime(body.start_date, "%Y-%m-%d")
     end = datetime.strptime(body.end_date, "%Y-%m-%d")
-
     if start >= end:
         raise ValueError("start_date must be before end_date")
 
-    hqg_bar_size = BAR_SIZE_MAP.get(body.bar_size.value)
-
     try:
         df = await asyncio.to_thread(
-            historical_provider.get_data, body.symbols, start, end, hqg_bar_size
+            historical_provider.get_data, body.symbols, start, end, body.bar_size.value
         )
+
     except ValueError as e:
         raise DataUnavailableError(str(e), symbols=body.symbols)
 
