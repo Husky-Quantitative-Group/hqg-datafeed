@@ -76,13 +76,15 @@ index:   DatetimeIndex named "date"
 columns: MultiIndex (series_id, field)
 ```
 
-The default alt-data field is `"value"`, although providers may return
-multiple fields per series.
+The default alt-data fields are `"value"` and `"available_at"`, although
+providers may return multiple fields per series.
 
-Important backtesting warning: alt data is indexed by observation date, not by
-the date the value became public, and values can be revised later. It is not
-safe to use alt data in a backtest without applying a publication lag. This
-library does not apply that lag.
+Important backtesting note: alt data is indexed by observation date, not by the
+date the value became public, and values can be revised later. Use
+`available_at` to filter point-in-time snapshots. `DataFeed.get_alt_data()`
+normalizes every provider's `available_at` field to a conservative end-of-day
+timestamp (`YYYY-MM-DD 23:59:59`) on the release date, even when the provider
+includes an intraday release time. Note that this behavior should be changed if we obtain datasources with intraday cadence. 
 
 ## Providers
 

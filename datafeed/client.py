@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, time
 import logging
 from typing import Mapping
 
@@ -43,11 +43,10 @@ class DataFeed:
         """
         Return native-frequency alternative data over exactly [start, end].
 
-        # TODO
         Alt data is indexed by observation date, not by the date the value
-        became public, and values can be revised later. It is not safe to use
-        in a backtest without applying a publication lag. This library does not
-        apply that lag yet. 
+        became public, and values can be revised later. If providers include
+        an available_at column, values are conservatively shifted to end-of-day
+        on their release date.
         """
         try:
             normalized = normalize_alt_data_ids(ids)
@@ -169,6 +168,8 @@ def _prepare_alt_frame(
     prepared = frame.copy()
     prepared.index = pd.to_datetime(prepared.index)
     prepared.index.name = "date"
+    if "available_at" in prepared.columns:
+        prepared["available_at"] = prepared["available_at"].map(_parse_available_at)
     return _slice_alt_frame(prepared, start, end)
 
 
@@ -178,3 +179,12 @@ def _slice_alt_frame(frame: pd.DataFrame, start: datetime, end: datetime) -> pd.
     sliced.index = pd.to_datetime(sliced.index)
     sliced.index.name = "date"
     return sliced
+
+
+def _parse_available_at(raw_value) -> pd.Timestamp:
+    """Parse provider release metadata into a conservative end-of-day timestamp."""
+    timestamp = pd.Timestamp(raw_value)
+    if pd.isna(timestamp):
+        return timestamp
+
+    return pd.Timestamp.combine(timestamp.date(), time(23, 59, 59))

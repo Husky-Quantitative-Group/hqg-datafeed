@@ -19,8 +19,9 @@ class FredProvider(AltDataProvider):
       - value:        the figure as published in that revision
       - available_at: first date that revision was the official figure (FRED's realtime_start)
 
-    To get what was known on a given day, keep rows with
-    available_at <= that day and take the latest per date.
+    To get what was known at a timestamp, keep rows with
+    available_at <= that timestamp and take the latest per date. The DataFeed
+    client normalizes available_at values to end-of-day.
     """
 
     def __init__(self, api_key: str | None):
