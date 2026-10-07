@@ -10,4 +10,4 @@ class MarketData:
     """Securities and alternative-data frames"""
 
     securities: pd.DataFrame
-    alt_data: pd.DataFrame
+    alt_data: dict[str, pd.DataFrame]

@@ -24,6 +24,7 @@ macro = feed.get_alt_data(
     datetime(2020, 1, 1),
     datetime(2024, 12, 31),
 )
+gdp = macro["FRED.GDP"]
 
 market_data = feed.get_data(
     securities=["SPY"],
@@ -67,24 +68,38 @@ Symbols are normalized to uppercase before download, deduplication, and output.
 `get_alt_data(ids, start, end)` fetches provider-prefixed series IDs such as
 `FRED.GDP`. IDs are split on the first dot, so IDs like
 `VENDOR.DATASET.FIELD` are valid. Provider prefixes, series IDs, and output
-column labels are uppercased.
+keys are uppercased.
 
-The returned frame has:
+The returned value is a dict keyed by normalized full series ID:
 
 ```text
-index:   DatetimeIndex named "date"
-columns: MultiIndex (series_id, field)
+{
+    "FRED.GDP": pd.DataFrame(...),
+    "FRED.DGS10": pd.DataFrame(...),
+}
 ```
 
-The default alt-data fields are `"value"` and `"available_at"`, although
-providers may return multiple fields per series.
+Each per-series frame has a `DatetimeIndex` named `"date"` and columns returned
+by the provider, normally `"value"` and `"available_at"`. Series are not 
+aligned to each other, and duplicate dates are valid within a frame when a
+series has one row per vintage.
 
 Important backtesting note: alt data is indexed by observation date, not by the
 date the value became public, and values can be revised later. Use
-`available_at` to filter point-in-time snapshots. `DataFeed.get_alt_data()`
-normalizes every provider's `available_at` field to a conservative end-of-day
-timestamp (`YYYY-MM-DD 23:59:59`) on the release date, even when the provider
-includes an intraday release time. Note that this behavior should be changed if we obtain datasources with intraday cadence. 
+`available_at` to filter point-in-time snapshots. Providers own the semantics
+and normalization of their `available_at` fields.
+
+Rows with missing observation dates or missing `value` fields are removed
+during alt-data preparation. Dropped rows are logged with warning-level counts.
+For alt-data slicing, `start` and `end` are interpreted as whole observation
+dates: `start` is floored to the start of its day, and `end` includes the full
+end date. The cleaned per-series frames must include `"value"` and
+`"available_at"`, and `(date, available_at)` pairs must be unique within each
+series.
+
+`raw_alt_data_fetch(ids, start, end)` returns the raw provider payloads keyed
+by normalized full series ID. It does not normalize, slice, reshape, or clean
+the provider response.
 
 ## Providers
 
@@ -107,13 +122,22 @@ _PROVIDER_FACTORIES = MappingProxyType(
 data = DataFeed(Config()).get_alt_data(["VENDOR.MY_SERIES"], start, end)
 ```
 
-Providers implement:
+Providers implement raw fetch and normalization separately:
 
 ```python
-fetch(series: list[str], start: datetime, end: datetime) -> dict[str, pd.DataFrame]
+fetch_raw(series: list[str], start: datetime, end: datetime) -> dict[str, object]
+normalize(raw_data: dict[str, object], start: datetime, end: datetime) -> dict[str, pd.DataFrame]
 ```
 
-Each returned DataFrame must have a `DatetimeIndex` and one or more columns.
+The base `fetch()` implementation calls `fetch_raw()` and then `normalize()`.
+Each normalized DataFrame must have a `DatetimeIndex` and one or more columns.
+
+The FRED provider first fetches `series/tags` and reads the tag with
+`group_id == "freq"`. Daily series are requested without FRED realtime
+parameters and use `date + 1 US federal business day` as `available_at`; less
+frequent series are requested with full realtime history. FRED normalizes
+`available_at` to a conservative end-of-day timestamp (`YYYY-MM-DD 23:59:59`)
+on the release date.
 
 ## Deliberate Non-Features (For Now)
 
@@ -132,3 +156,4 @@ The consuming application owns those policies.
 
 ## Known Issues 
 - FRED may rate limit output for vintage dates that have many revisions
+- Add async calling

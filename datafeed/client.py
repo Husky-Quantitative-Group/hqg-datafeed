@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, time
+from datetime import datetime
 import logging
-from typing import Mapping
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -39,29 +39,20 @@ class DataFeed:
         ids: list[str],
         start: datetime,
         end: datetime,
-    ) -> pd.DataFrame:
+    ) -> dict[str, pd.DataFrame]:
         """
-        Return native-frequency alternative data over exactly [start, end].
+        Return native-frequency alternative data keyed by full series id.
 
-        Alt data is indexed by observation date, not by the date the value
-        became public, and values can be revised later. If providers include
-        an available_at column, values are conservatively shifted to end-of-day
-        on their release date.
+        Each frame is indexed by observation date over exactly [start, end].
+        The index may contain duplicate dates, one row per vintage. Series are
+        never aligned to each other. Providers own available_at semantics.
         """
-        try:
-            normalized = normalize_alt_data_ids(ids)
-        except DataFeedError as exc:
-            raise DataFeedError(f"{exc}. Registered providers: {self._registered_providers()}") from exc
-        if not normalized:
-            return _empty_alt_frame()
+        requested = self._normalize_alt_data_ids(ids)
+        if not requested:
+            return {}
 
-        self._validate_providers(normalized)
-
-        grouped: dict[str, list[AltDataId]] = defaultdict(list)
-        for parsed in normalized:
-            grouped[parsed.provider].append(parsed)
-
-        series_frames: dict[tuple[str, str], pd.Series] = {}
+        grouped = _group_normalized_alt_data_ids(requested)
+        series_frames: dict[str, pd.DataFrame] = {}
 
         # Obtain output by provider and associate with requested id
         for provider_prefix, requested_ids in grouped.items():
@@ -89,23 +80,46 @@ class DataFeed:
                     raise DataFeedError(
                         f"Provider '{provider_prefix}' returned empty data for series {item.output_id}"
                     )
+                _validate_alt_frame(clean_frame, item.output_id, provider_prefix)
 
-                for field in clean_frame.columns:
-                    series_frames[(item.output_id, str(field))] = clean_frame[field]
+                series_frames[item.output_id] = clean_frame
 
-        if not series_frames:
-            return _empty_alt_frame()
+        return {item.output_id: series_frames[item.output_id] for item in requested}
 
-        result = pd.DataFrame(series_frames)
-        result.index = pd.to_datetime(result.index)
-        result.index.name = "date"
-        result.columns = pd.MultiIndex.from_tuples(
-            result.columns,
-            names=["series_id", "field"],
-        )
+    def raw_alt_data_fetch(
+        self,
+        ids: list[str],
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, Any]:
+        """Return raw provider payloads keyed by normalized full series id."""
+        grouped = self._group_alt_data_ids(ids)
+        if not grouped:
+            return {}
 
-        # Redundant slice to ensure only date in range is returned
-        return _slice_alt_frame(result, start, end)
+        result: dict[str, Any] = {}
+        for provider_prefix, requested_ids in grouped.items():
+            provider = self.providers[provider_prefix]
+            series = [item.series for item in requested_ids]
+            full_ids = [item.output_id for item in requested_ids]
+
+            try:
+                provider_result = provider.fetch_raw(series, start, end)
+            except Exception as exc:
+                raise DataFeedError(
+                    f"Provider '{provider_prefix}' failed for raw series "
+                    f"{', '.join(full_ids)}: {exc}"
+                ) from exc
+
+            for item in requested_ids:
+                payload = _find_provider_payload(provider_result, item.series)
+                if payload is None:
+                    raise DataFeedError(
+                        f"Provider '{provider_prefix}' returned no raw data for series {item.output_id}"
+                    )
+                result[item.output_id] = payload
+
+        return result
 
     def get_data(
         self,
@@ -135,18 +149,37 @@ class DataFeed:
     def _registered_providers(self) -> str:
         return ", ".join(sorted(self.providers)) or "none"
 
+    def _group_alt_data_ids(self, ids: list[str]) -> dict[str, list[AltDataId]]:
+        return _group_normalized_alt_data_ids(self._normalize_alt_data_ids(ids))
 
-def _empty_alt_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        index=pd.DatetimeIndex([], name="date"),
-        columns=pd.MultiIndex.from_tuples([], names=["series_id", "field"]),
-    )
+    def _normalize_alt_data_ids(self, ids: list[str]) -> list[AltDataId]:
+        try:
+            normalized = normalize_alt_data_ids(ids)
+        except DataFeedError as exc:
+            raise DataFeedError(f"{exc}. Registered providers: {self._registered_providers()}") from exc
+
+        self._validate_providers(normalized)
+        return normalized
+
+
+def _group_normalized_alt_data_ids(ids: list[AltDataId]) -> dict[str, list[AltDataId]]:
+    grouped: dict[str, list[AltDataId]] = defaultdict(list)
+    for parsed in ids:
+        grouped[parsed.provider].append(parsed)
+    return grouped
 
 
 def _find_provider_frame(
     provider_result: dict[str, pd.DataFrame],
     series_id: str,
 ) -> pd.DataFrame | None:
+    return _find_provider_payload(provider_result, series_id)
+
+
+def _find_provider_payload(
+    provider_result: Mapping[str, Any],
+    series_id: str,
+) -> Any | None:
     if series_id in provider_result:
         return provider_result[series_id]
 
@@ -166,25 +199,54 @@ def _prepare_alt_frame(
         raise DataFeedError("Alt data providers must return pandas DataFrames")
 
     prepared = frame.copy()
-    prepared.index = pd.to_datetime(prepared.index)
+    original_len = len(prepared)
+    prepared.index = pd.to_datetime(prepared.index, errors="coerce")
     prepared.index.name = "date"
-    if "available_at" in prepared.columns:
-        prepared["available_at"] = prepared["available_at"].map(_parse_available_at)
+    prepared = prepared.loc[prepared.index.notna()]
+    dropped_bad_dates = original_len - len(prepared)
+    if dropped_bad_dates:
+        logger.warning("Dropped %s alt-data row(s) with missing or invalid dates", dropped_bad_dates)
+
+    if "value" in prepared.columns:
+        before_value_drop = len(prepared)
+        prepared = prepared.dropna(subset=["value"])
+        dropped_missing_values = before_value_drop - len(prepared)
+        if dropped_missing_values:
+            logger.warning("Dropped %s alt-data row(s) with missing values", dropped_missing_values)
     return _slice_alt_frame(prepared, start, end)
+
+
+def _validate_alt_frame(
+    frame: pd.DataFrame,
+    series_id: str,
+    provider_prefix: str,
+) -> None:
+    required_columns = ["value", "available_at"]
+    missing_columns = [column for column in required_columns if column not in frame.columns]
+    if missing_columns:
+        raise DataFeedError(
+            f"Provider '{provider_prefix}' returned invalid data for series {series_id}: "
+            f"missing required column(s): {', '.join(missing_columns)}"
+        )
+
+    pairs = pd.DataFrame(
+        {
+            "date": pd.to_datetime(frame.index),
+            "available_at": frame["available_at"].to_numpy(),
+        }
+    )
+    if pairs.duplicated().any():
+        raise DataFeedError(
+            f"Provider '{provider_prefix}' returned duplicate (date, available_at) "
+            f"rows for series {series_id}"
+        )
 
 
 def _slice_alt_frame(frame: pd.DataFrame, start: datetime, end: datetime) -> pd.DataFrame:
     index = pd.to_datetime(frame.index)
-    sliced = frame.loc[(index >= pd.Timestamp(start)) & (index <= pd.Timestamp(end))]
+    start_bound = pd.Timestamp(start).normalize()
+    end_bound = pd.Timestamp(end).normalize() + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    sliced = frame.loc[(index >= start_bound) & (index <= end_bound)]
     sliced.index = pd.to_datetime(sliced.index)
     sliced.index.name = "date"
     return sliced
-
-
-def _parse_available_at(raw_value) -> pd.Timestamp:
-    """Parse provider release metadata into a conservative end-of-day timestamp."""
-    timestamp = pd.Timestamp(raw_value)
-    if pd.isna(timestamp):
-        return timestamp
-
-    return pd.Timestamp.combine(timestamp.date(), time(23, 59, 59))
