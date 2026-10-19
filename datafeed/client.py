@@ -244,8 +244,15 @@ def _validate_alt_frame(
 
 def _slice_alt_frame(frame: pd.DataFrame, start: datetime, end: datetime) -> pd.DataFrame:
     index = pd.to_datetime(frame.index)
-    start_bound = pd.Timestamp(start).normalize()
-    end_bound = pd.Timestamp(end).normalize() + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    start_bound = pd.Timestamp(start)
+    end_bound = pd.Timestamp(end)
+    if index.tz is None:
+        if start_bound.tzinfo is not None:
+            start_bound = start_bound.tz_convert("UTC").tz_localize(None)
+        if end_bound.tzinfo is not None:
+            end_bound = end_bound.tz_convert("UTC").tz_localize(None)
+    start_bound = start_bound.normalize()
+    end_bound = end_bound.normalize() + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
     sliced = frame.loc[(index >= start_bound) & (index <= end_bound)]
     sliced.index = pd.to_datetime(sliced.index)
     sliced.index.name = "date"

@@ -10,6 +10,7 @@ from dotenv import dotenv_values
 
 from datafeed.altdata.base import AltDataProvider
 from datafeed.altdata.fred import FredProvider
+from datafeed.altdata.kalshi import KalshiProvider
 
 ProviderFactory = Callable[["Config"], AltDataProvider]
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
@@ -19,6 +20,7 @@ _PLACEHOLDER_VALUES = {"", "INSERT_API_KEY_HERE"}
 _PROVIDER_FACTORIES: Mapping[str, ProviderFactory] = MappingProxyType(
     {
         "FRED": lambda config: FredProvider(config.fred_api_key),
+        "KALSHI": lambda config: KalshiProvider(),
     }
 )
 

@@ -139,6 +139,43 @@ frequent series are requested with full realtime history. FRED normalizes
 `available_at` to a conservative end-of-day timestamp (`YYYY-MM-DD 23:59:59`)
 on the release date.
 
+### Kalshi prediction markets
+
+Request an exact market ticker using `KALSHI.<MARKET_TICKER>`:
+
+```python
+prediction = feed.get_alt_data(
+    ["KALSHI.YOUR-MARKET-TICKER"],  # Replace with an actual Kalshi market ticker.
+    datetime(2024, 1, 1),
+    datetime(2024, 12, 31),
+)
+```
+
+The provider uses public REST endpoints without credentials and fetches daily
+candles (`period_interval=1440`). It resolves live markets through their event
+metadata and automatically uses historical endpoints for archived markets,
+including when a live candle request returns HTTP 404 during archival.
+
+`value` is the YES trade close in dollars on a 0–1 scale (for example, `0.62`).
+The `date` index and `available_at` both contain the exact candle end timestamp,
+converted from Unix seconds to timezone-naive UTC. Naive request dates mean UTC;
+aware bounds are converted to UTC before selecting whole inclusive dates.
+Missing trade closes and candles ending after fetch time are excluded. There
+is no forward-filling or substitution of settlement values. Requests with no
+usable observations raise `DataFeedError`.
+
+Candle end is an assumed availability time, not a measured publication time;
+historical candles do not establish publication latency or revision history.
+The backtester only exposes a candle when `available_at < simulation clock`.
+Contract discovery, recurring-contract selection, trading, streaming, and other
+metrics are outside this provider. `raw_alt_data_fetch()` preserves metadata
+and candle response text and HTTP status codes alongside the fetch cutoff and
+the selected live/historical candle format.
+
+API references: [live candlesticks](https://docs.kalshi.com/api-reference/market/get-market-candlesticks),
+[historical candlesticks](https://docs.kalshi.com/api-reference/historical/get-historical-market-candlesticks),
+and [historical data routing](https://docs.kalshi.com/getting_started/historical_data).
+
 ## Deliberate Non-Features (For Now)
 
 This library deliberately does not do:
