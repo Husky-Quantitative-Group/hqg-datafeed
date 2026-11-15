@@ -9,8 +9,8 @@ from typing import Callable, Mapping
 from dotenv import dotenv_values
 
 from datafeed.altdata.base import AltDataProvider
-from datafeed.altdata.fred import FredProvider
-from datafeed.altdata.kalshi import KalshiProvider
+from datafeed.altdata.providers.fred import FredProvider
+from datafeed.altdata.providers.kalshi import KalshiProvider
 
 ProviderFactory = Callable[["Config"], AltDataProvider]
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
