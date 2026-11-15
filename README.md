@@ -3,9 +3,33 @@
 `hqg-datafeed` is a small, stateless Python library for fetching daily
 securities data and native-frequency alternative data.
 
-The import package is `datafeed`:
+## Installation
 
-### Example
+Requires Python 3.10 or newer. The distribution name is `hqg-datafeed`;
+the import package is `datafeed`.
+
+```shell
+python -m pip install hqg-datafeed
+```
+
+For development, run from the repository root:
+
+```shell
+python -m pip install -e ".[test,release]"
+python -m pytest
+```
+
+## Configuration
+
+Set the `FRED_API_KEY` environment variable for FRED requests, or pass it
+explicitly using `Config(fred_api_key="...")`. Securities and Kalshi requests
+do not require this key.
+
+When running from a source checkout, `Config()` also reads `.env` in the
+repository root as a fallback. The `.env` file is excluded from distributions;
+use an environment variable or explicit configuration after installing from PyPI.
+
+## Example
 ```python
 from datetime import datetime
 
@@ -33,9 +57,6 @@ market_data = feed.get_data(
     end=datetime(2024, 12, 31),
 )
 ```
-
-`Config()` reads `FRED_API_KEY` from `.env` in the `hqg-datafeed` project
-folder. Passing `Config(fred_api_key="...")` still overrides the file value.
 
 ## Securities Data
 
@@ -187,7 +208,6 @@ This library deliberately does not do:
 - Row dropping after joins
 - History floors or automatic range widening
 - Trading-day or holiday logic
-- Environment-variable configuration
 
 The consuming application owns those policies.
 

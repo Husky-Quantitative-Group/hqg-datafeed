@@ -8,6 +8,14 @@ version = "0.1.0"
 description = "Stateless market and alternative data fetching library for HQG"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "Husky Quantitative Group" }]
+keywords = ["market-data", "finance", "fred", "yfinance", "kalshi"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial",
+]
 dependencies = [
     "pandas",
     "python-dotenv",
@@ -17,9 +25,20 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+release = ["build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/Husky-Quantitative-Group/hqg-datafeed"
+Repository = "https://github.com/Husky-Quantitative-Group/hqg-datafeed"
+Issues = "https://github.com/Husky-Quantitative-Group/hqg-datafeed/issues"
+
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.packages.find]
-include = ["datafeed*"]
+where = ["."]
+include = ["datafeed", "datafeed.*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,7 @@
+include README.md
+include docs/publishing.md
+prune tests
+prune .venv
+prune build
+prune dist
+global-exclude .env .env.* .pypirc *.py[cod] __pycache__
