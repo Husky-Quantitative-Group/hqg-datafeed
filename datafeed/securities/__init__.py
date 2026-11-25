@@ -6,7 +6,7 @@ import threading
 
 import pandas as pd
 
-from datafeed.errors import DataFeedError
+from datafeed.errors import DataFeedError, DataUnavailableError
 
 try:
     import yfinance as yf
@@ -53,7 +53,7 @@ def get_securities_frame(
         )
 
     if raw.empty:
-        raise DataFeedError(
+        raise DataUnavailableError(
             f"yfinance returned no data for requested symbols: {', '.join(unique_symbols)}"
         )
 
@@ -80,7 +80,7 @@ def get_securities_frame(
             missing_symbols.append(symbol)
 
     if missing_symbols:
-        raise DataFeedError(
+        raise DataUnavailableError(
             "No securities data available in requested range for: "
             + ", ".join(missing_symbols)
         )
@@ -119,7 +119,7 @@ def _extract_symbol(data: pd.DataFrame, symbol: str) -> pd.DataFrame:
         lookup = {str(value).lower(): value for value in level_values}
         matched_symbol = lookup.get(symbol.lower())
         if matched_symbol is None:
-            raise DataFeedError(f"Symbol {symbol} not in download result")
+            raise DataUnavailableError(f"Symbol {symbol} not in download result")
         source = data[matched_symbol]
     else:
         source = data
