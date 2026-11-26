@@ -110,8 +110,10 @@ date the value became public, and values can be revised later. Use
 `available_at` to filter point-in-time snapshots. Providers own the semantics
 and normalization of their `available_at` fields.
 
-Rows with missing observation dates or missing `value` fields are removed
-during alt-data preparation. Dropped rows are logged with warning-level counts.
+During alt-data preparation, rows with missing or invalid observation dates are
+removed and logged if they make up at most 25% of the original series frame.
+If more than 25% have invalid dates, the data call raises an error. Rows with
+missing `value` fields are also removed and logged.
 For alt-data slicing, `start` and `end` are interpreted as whole observation
 dates: `start` is floored to the start of its day, and `end` includes the full
 end date. The cleaned per-series frames must include `"value"` and
@@ -124,24 +126,45 @@ the provider response.
 
 ## Providers
 
-Providers are defined in `datafeed/config.py`. Callers cannot mutate the
-provider registry through `Config` or `DataFeed`.
+Provider implementations live in `datafeed/altdata/providers/`, and the base
+interface remains in `datafeed/altdata/base.py`. The provider registry is defined
+in `datafeed/altdata/registry.py`. Callers cannot mutate the registry through
+`Config` or `DataFeed`. Import providers from `datafeed.altdata` or their modules under
+`datafeed.altdata.providers`.
 
-To add a new built-in provider, implement `AltDataProvider` and add a factory
-to the provider registry in `config.py`:
+To add a new built-in provider:
+
+1. Implement `AltDataProvider` in `datafeed/altdata/providers/`.
+2. Import the implementation and register its factory in
+   `datafeed/altdata/registry.py`.
+3. Add required credentials to `_ENV_KEYS` in `datafeed/config.py`.
+   This mapping supplies environment loading, constructor overrides, and secret
+   discovery without a separate dataclass field declaration. For example,
+   `"vendor_api_key": "VENDOR_API_KEY"` enables `Config(vendor_api_key="...")`.
+
+For example, extend the existing factory mapping in `altdata/registry.py`:
 
 ```python
 from types import MappingProxyType
 
+from datafeed.altdata.providers.fred import FredProvider
+from datafeed.altdata.providers.kalshi import KalshiProvider
+from datafeed.altdata.providers.vendor import VendorProvider
+
 _PROVIDER_FACTORIES = MappingProxyType(
     {
         "FRED": lambda config: FredProvider(config.fred_api_key),
-        "VENDOR": lambda config: VendorProvider(...),
+        "KALSHI": lambda config: KalshiProvider(),
+        "VENDOR": lambda config: VendorProvider(config.vendor_api_key),
     }
 )
-
-data = DataFeed(Config()).get_alt_data(["VENDOR.MY_SERIES"], start, end)
 ```
+
+The registry's `build_providers(config)` constructs fresh provider instances and
+returns an immutable mapping. `Config.providers` delegates to it, preserving the
+existing `Config` and `DataFeed` API without sharing provider instances globally.
+The example assumes `vendor_api_key` has been added to `Config`. The new provider
+can then be requested as `VENDOR.MY_SERIES` through `DataFeed.get_alt_data()`.
 
 Providers implement raw fetch and normalization separately:
 
@@ -151,7 +174,20 @@ normalize(raw_data: dict[str, object], start: datetime, end: datetime) -> dict[s
 ```
 
 The base `fetch()` implementation calls `fetch_raw()` and then `normalize()`.
-Each normalized DataFrame must have a `DatetimeIndex` and one or more columns.
+Each normalized DataFrame must contain both value and available_at.
+
+Shared helpers in `datafeed/altdata/common.py` handle HTTP retries, exponential
+backoff, `Retry-After` parsing, raw response storage, JSON object validation,
+and bounded error text. Providers supply their retry statuses, delay policy,
+and error context, and retain their own HTTP error interpretation and data
+transformations. FRED accepts numeric retry delays; Kalshi also accepts HTTP
+dates and retries all 5xx responses.
+
+The client uses the same module for case-insensitive response lookup and frame
+preparation, whole-date slicing, required-column validation, and duplicate
+observation/availability detection. Preparation preserves row order, extra
+columns, and provider-defined `available_at` values without changing the input
+frame. Providers retain their own sorting and timestamp conventions.
 
 The FRED provider first fetches `series/tags` and reads the tag with
 `group_id == "freq"`. Daily series are requested without FRED realtime
@@ -197,6 +233,42 @@ API references: [live candlesticks](https://docs.kalshi.com/api-reference/market
 [historical candlesticks](https://docs.kalshi.com/api-reference/historical/get-historical-market-candlesticks),
 and [historical data routing](https://docs.kalshi.com/getting_started/historical_data).
 
+## Errors and logging
+
+All library error categories inherit from `DataFeedError`, so existing
+`except DataFeedError` handlers continue to work. Import the more specific
+classes from `datafeed` or `datafeed.errors` when different recovery is useful:
+
+| Exception | Meaning |
+| --- | --- |
+| `DataFeedRequestError` | Transport failures or unsuccessful HTTP requests |
+| `InvalidProviderResponseError` | Malformed JSON, invalid response shapes, or invalid/duplicate observations |
+| `InvalidSeriesIdError` | Malformed series IDs or unknown provider prefixes |
+| `DataUnavailableError` | Missing series, HTTP 404 resources, or no usable data in the requested range |
+
+Missing configuration and other uncategorized failures continue to use
+`DataFeedError`. Provider failures retain their category when `DataFeed` adds
+provider and requested-series context. Existing messages are retained except
+when credential details require redaction. Transport errors report exception
+types without including authenticated request URLs; redacted errors suppress
+unsafe exception chains. Raw payloads remain unchanged for explicit inspection.
+
+Credential discovery is centralized in `errors.py`: client operations use the
+feed's `Config`, and authenticated provider entry points use `@redact_errors`
+to cover direct calls too. Config declares every credential in `_ENV_KEYS` as
+secret automatically, including fields with unconventional names. For direct
+provider calls, credential-like attribute names or explicit `secret_fields`
+declarations identify values to redact.
+Redaction is scoped to each operation and isolated between concurrent feeds;
+providers do not pass lists of secret values. Custom code can also use
+`with error_redaction(config):` when creating errors outside a feed operation.
+
+Library diagnostics use module loggers without configuring application logging.
+Retry attempts are logged at DEBUG with provider/series context, attempt counts,
+status or exception type, and delay. Dropped-row warnings include the series ID.
+Applications choose log handlers and levels; request headers and raw response
+bodies are not included in retry diagnostics.
+
 ## Deliberate Non-Features (For Now)
 
 This library deliberately does not do:
@@ -207,7 +279,6 @@ This library deliberately does not do:
 - Calendar alignment between securities or alt series
 - Row dropping after joins
 - History floors or automatic range widening
-- Trading-day or holiday logic
 
 The consuming application owns those policies.
 
