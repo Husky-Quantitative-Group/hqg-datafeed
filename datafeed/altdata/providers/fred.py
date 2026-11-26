@@ -1,16 +1,32 @@
 from __future__ import annotations
 
 from datetime import datetime
-import json
+from functools import partial
 from time import sleep
 from typing import Any
 
 import pandas as pd
-from pandas.tseries.holiday import USFederalHolidayCalendar
 import requests
 
 from datafeed.altdata.base import AltDataProvider
-from datafeed.errors import DataFeedError
+from datafeed.altdata.common import (
+    add_federal_business_day,
+    error_message,
+    http_error_message,
+    parse_json_object,
+    plain_error_message,
+    request_with_retries,
+    retry_delay,
+    store_response,
+    to_end_of_day,
+)
+from datafeed.errors import (
+    DataFeedError,
+    DataFeedRequestError,
+    DataUnavailableError,
+    InvalidProviderResponseError,
+    redact_errors,
+)
 
 _FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
 _FRED_TAGS_URL = "https://api.stlouisfed.org/fred/series/tags"
@@ -19,7 +35,6 @@ _DAILY_FREQUENCY = "daily"
 _FRED_MAX_ATTEMPTS = 4
 _FRED_BACKOFF_SECONDS = 1.0
 _FRED_MAX_RETRY_AFTER_SECONDS = 60.0
-_FRED_DAILY_OFFSET = pd.offsets.CustomBusinessDay(calendar=USFederalHolidayCalendar())
 _RETRY_STATUS_CODES = {423, 429, 500}
 _HANDLED_STATUS_MESSAGES = {
     400: "Bad request",
@@ -36,6 +51,7 @@ class FredProvider(AltDataProvider):
     def __init__(self, api_key: str | None):
         self.api_key = api_key
 
+    @redact_errors
     def fetch_raw(
         self,
         series: list[str],
@@ -50,34 +66,9 @@ class FredProvider(AltDataProvider):
         for series_id in series:
             normalized_series_id = series_id.upper()
             try:
-                tags_response = self._request_tags(normalized_series_id)
-                raw_payload: dict[str, object] = {
-                    "tags": tags_response.text,
-                    "tags_status_code": tags_response.status_code,
-                }
-
-                if tags_response.status_code < 400:
-                    tags_payload = self._json_from_text(
-                        tags_response.text,
-                        tags_response.status_code,
-                        normalized_series_id,
-                        "tags",
-                    )
-                    frequency = _frequency_from_tags(tags_payload)
-                    observations_response = self._request_observations(
-                        normalized_series_id,
-                        start,
-                        end,
-                        include_realtime_params=frequency != _DAILY_FREQUENCY,
-                    )
-                    raw_payload.update(
-                        {
-                            "observations": observations_response.text,
-                            "observations_status_code": observations_response.status_code,
-                        }
-                    )
-
-                result[normalized_series_id] = raw_payload
+                result[normalized_series_id] = self._fetch_raw_series(
+                    normalized_series_id, start, end
+                )
             except DataFeedError:
                 raise
             except Exception as exc:
@@ -87,6 +78,33 @@ class FredProvider(AltDataProvider):
 
         return result
 
+    def _fetch_raw_series(
+        self, series_id: str, start: datetime, end: datetime
+    ) -> dict[str, object]:
+        """Fetch tags and frequency-dependent observations, preserving raw responses."""
+        tags_response = self._request_tags(series_id)
+        raw_payload: dict[str, Any] = {}
+        store_response(raw_payload, "tags", tags_response)
+
+        if tags_response.status_code < 400:
+            tags_payload = self._json_from_text(
+                tags_response.text,
+                tags_response.status_code,
+                series_id,
+                "tags",
+            )
+            frequency = _frequency_from_tags(tags_payload)
+            observations_response = self._request_observations(
+                series_id,
+                start,
+                end,
+                include_realtime_params=frequency != _DAILY_FREQUENCY,
+            )
+            store_response(raw_payload, "observations", observations_response)
+
+        return raw_payload
+
+    @redact_errors
     def normalize(
         self,
         raw_data: dict[str, Any],
@@ -97,7 +115,7 @@ class FredProvider(AltDataProvider):
 
         for series_id, payload in raw_data.items():
             if not isinstance(payload, dict):
-                raise DataFeedError(f"FRED raw payload for series '{series_id}' must be a dict")
+                raise InvalidProviderResponseError(f"FRED raw payload for series '{series_id}' must be a dict")
 
             tags_payload = self._checked_json_payload(payload, series_id, "tags")
             frequency = _frequency_from_tags(tags_payload)
@@ -162,31 +180,21 @@ class FredProvider(AltDataProvider):
         series_id: str,
         payload_name: str,
     ) -> requests.Response:
-        last_exception: requests.RequestException | None = None
+        return request_with_retries(
+            lambda: requests.get(url, params=params, timeout=30),
+            max_attempts=_FRED_MAX_ATTEMPTS,
+            retry_status=lambda status: status in _RETRY_STATUS_CODES,
+            retry_delay=partial(
+                retry_delay,
+                base_seconds=_FRED_BACKOFF_SECONDS,
+                max_seconds=_FRED_MAX_RETRY_AFTER_SECONDS,
+                require_finite=False,
+            ),
+            sleep=sleep,
+            context=f"FRED {payload_name} request failed for series '{series_id}'",
+        )
 
-        for attempt in range(1, _FRED_MAX_ATTEMPTS + 1):
-            try:
-                response = requests.get(url, params=params, timeout=30)
-            except requests.RequestException as exc:
-                last_exception = exc
-                if attempt == _FRED_MAX_ATTEMPTS:
-                    break
-                _sleep_before_retry(attempt)
-                continue
-
-            if response.status_code not in _RETRY_STATUS_CODES:
-                return response
-            if attempt == _FRED_MAX_ATTEMPTS:
-                return response
-
-            _sleep_before_retry(attempt, response=response)
-
-        assert last_exception is not None
-        raise DataFeedError(
-            f"FRED {payload_name} request failed for series '{series_id}' "
-            f"after {_FRED_MAX_ATTEMPTS} attempts ({type(last_exception).__name__})"
-        ) from None
-
+    @redact_errors
     def _checked_json_payload(
         self,
         payload: dict[str, Any],
@@ -200,15 +208,16 @@ class FredProvider(AltDataProvider):
         if status_code < 400:
             return parsed
 
-        message = _http_error_message(parsed, status_code)
+        message = http_error_message(parsed, status_code, _HANDLED_STATUS_MESSAGES)
         if (
             payload_name == "tags"
             and status_code == 400
             and "series does not exist" in message.lower()
         ):
-            raise DataFeedError(f"FRED series not found: {series_id}")
+            raise DataUnavailableError(f"FRED series not found: {series_id}")
 
-        raise DataFeedError(
+        error_class = DataUnavailableError if status_code == 404 else DataFeedRequestError
+        raise error_class(
             f"FRED {payload_name} fetch failed for series '{series_id}' "
             f"(HTTP {status_code}): {message}"
         )
@@ -220,25 +229,16 @@ class FredProvider(AltDataProvider):
         series_id: str,
         payload_name: str,
     ) -> dict[str, Any]:
-        if not isinstance(raw_text, str):
-            raise DataFeedError(f"FRED returned no {payload_name} response for series '{series_id}'")
-
-        try:
-            parsed = json.loads(raw_text)
-        except ValueError:
-            if status_code >= 400:
-                return {"message": _plain_error_message(raw_text)}
-
-            raise DataFeedError(
-                f"FRED returned non-JSON {payload_name} response for series '{series_id}' "
-                f"(HTTP {status_code})"
-            ) from None
-
-        if not isinstance(parsed, dict):
-            raise DataFeedError(
-                f"FRED returned invalid {payload_name} response for series '{series_id}'"
-            )
-        return parsed
+        fallback = None
+        if status_code >= 400 and isinstance(raw_text, str):
+            fallback = {"message": plain_error_message(raw_text, suffix="...")}
+        return parse_json_object(
+            raw_text,
+            provider="FRED",
+            context=f"{payload_name} response for series '{series_id}'",
+            non_json_suffix=f" (HTTP {status_code})",
+            non_json_fallback=fallback,
+        )
 
     def _normalize_observations(
         self,
@@ -251,10 +251,10 @@ class FredProvider(AltDataProvider):
     ) -> pd.DataFrame:
         observations = payload.get("observations")
         if observations is None:
-            message = _error_message(payload) or "missing observations"
-            raise DataFeedError(f"FRED fetch failed for series '{series_id}': {message}")
+            message = error_message(payload) or "missing observations"
+            raise InvalidProviderResponseError(f"FRED fetch failed for series '{series_id}': {message}")
         if not isinstance(observations, list):
-            raise DataFeedError(f"FRED returned invalid observations for series '{series_id}'")
+            raise InvalidProviderResponseError(f"FRED returned invalid observations for series '{series_id}'")
 
         rows = []
         is_daily = frequency == _DAILY_FREQUENCY
@@ -269,7 +269,7 @@ class FredProvider(AltDataProvider):
                     "date": raw_date,
                     "value": None if raw_value == "." else raw_value,
                     "available_at": (
-                        pd.Timestamp(raw_date) + _FRED_DAILY_OFFSET
+                        add_federal_business_day(raw_date)
                         if is_daily and raw_date
                         else observation.get("realtime_start")
                     ),
@@ -278,20 +278,17 @@ class FredProvider(AltDataProvider):
 
         frame = pd.DataFrame(rows, columns=["date", "value", "available_at"])
         if frame.empty:
-            raise DataFeedError(
+            raise DataUnavailableError(
                 f"FRED returned no observations for series '{series_id}' "
                 f"between {start.date()} and {end.date()}"
             )
 
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
-        frame["available_at"] = (
-            pd.to_datetime(frame["available_at"], errors="coerce", format="mixed").dt.normalize()
-            + pd.Timedelta(hours=23, minutes=59, seconds=59)
-        )
+        frame["available_at"] = to_end_of_day(frame["available_at"])
         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
         frame = frame.dropna(subset=["date", "value", "available_at"])
         if frame.empty:
-            raise DataFeedError(
+            raise DataUnavailableError(
                 f"FRED returned no usable observations for series '{series_id}' "
                 f"between {start.date()} and {end.date()}"
             )
@@ -310,54 +307,3 @@ def _frequency_from_tags(payload: dict[str, Any]) -> str | None:
         if str(tag.get("group_id", "")).lower() == "freq":
             return str(tag.get("name", "")).strip().lower() or None
     return None
-
-
-def _sleep_before_retry(attempt: int, *, response: requests.Response | None = None) -> None:
-    retry_after = _retry_after_seconds(response)
-    if retry_after is not None:
-        sleep(retry_after)
-        return
-
-    sleep(_FRED_BACKOFF_SECONDS * (2 ** (attempt - 1)))
-
-
-def _retry_after_seconds(response: requests.Response | None) -> float | None:
-    if response is None:
-        return None
-
-    raw_value = response.headers.get("Retry-After")
-    if raw_value is None:
-        return None
-
-    try:
-        retry_after = float(raw_value)
-    except ValueError:
-        return None
-
-    return min(max(0.0, retry_after), _FRED_MAX_RETRY_AFTER_SECONDS)
-
-
-def _http_error_message(payload: dict[str, Any], status_code: int) -> str:
-    provider_message = _error_message(payload)
-    status_message = _HANDLED_STATUS_MESSAGES.get(status_code)
-    if status_message and provider_message:
-        return f"{status_message}: {provider_message}"
-    if status_message:
-        return status_message
-    return provider_message
-
-
-def _plain_error_message(raw_text: str) -> str:
-    stripped = " ".join(raw_text.split())
-    if len(stripped) > 200:
-        return f"{stripped[:200]}..."
-    return stripped
-
-
-def _error_message(payload: dict[str, Any]) -> str:
-    return str(
-        payload.get("error_message")
-        or payload.get("message")
-        or payload.get("error")
-        or ""
-    )
